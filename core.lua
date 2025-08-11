@@ -14,6 +14,11 @@ local next = next
 
 
 
+print = API_PrintString
+
+
+
+
 -- API library for Lua and the engine to communicate with each other, containing functions which can callback either way
 API = {}
 
@@ -110,7 +115,7 @@ function CreateClass(name, parents)
 	-- class and mt need to be kept separate so that class only contains its default values that need to be copied and not any metamethods or metavalues
 	
 	-- custom metavalue to denote an object's type; to distinguish between class and instance, just check if the object equals the metatable since a class is its own metatable!
-	mt.__call = function(self, args)
+	mt.__call = function(self, ...)
 		local o = setmetatable({}, getmetatable(self))
 		
 		-- DO A DEEP COPY OF ALL VALUES IN CLASS OBJECT -> NEW INSTANCE OBJECT
@@ -130,7 +135,7 @@ function CreateClass(name, parents)
 		end
 		
 		if self.Init then
-			self.Init(o, args)
+			self.Init(o, ...)
 		end
 		
 		return o
@@ -177,8 +182,9 @@ Class = function(name, dependencies, onDependenciesLoaded, premadeClassObject)
 		classObject = setmetatable({}, mt)
 	end
 	
+
 	-- assign the setup function's environment to be the class object. this can be done at anytime, as every function has an environment variable as an upvalue I'm pretty sure from what I've read, so might as well assign it here.
-	setfenv(onDependenciesLoaded, classObject)
+	--setfenv(onDependenciesLoaded, classObject)
 	
 	-- TODO: WE COULD PROBABLY MOVE A BUNCH OF THESE PROPERTIES TO THE CLASS OBJECT ITSELF AND MAKE THEM STATIC SO THAT INSTANCES DON'T COPY THEM, THOUGH IT WOULD ADD SLIGHTLY MORE WORK WHEN CREATING INSTANCES TO TRAVERSE THESE PROPERTIES AS WELL. HMMMMMMMMMMMMMM
 	mt.classObject = classObject
@@ -186,11 +192,24 @@ Class = function(name, dependencies, onDependenciesLoaded, premadeClassObject)
 	-- NOTE: parent table is mapped as classObject -> index order for faster searching (in 'SubclassOf' for example) while maintaining information about order of inheritance
 	mt.parents = {}
 	mt.modifiers = {}
+	mt.__call = function(self, constructor, ...)
+		local o = setmetatable({}, getmetatable(self))
+		
+		if constructor then
+			constructor(o, ...)
+		end
+		
+		return o
+	end
 	
 	--mt.__gc BIG NOTE: I read in the lua manual that the __gc method needs to be in the metatable when you assign it to the object. Could maybe create __gc then set metatable to the object again as a workaround. Do testing to verify.
 	
 	-- reference dependencies from this class's metatable to keep them alive
 	mt.dependencies = {}
+	
+	if not dependencies then
+		return classObject
+	end
 	
 	-- we must do two traversals of dependencies, the first to count references and the next to actually request class dependencies from UUIDs. We cannot do it in the same traversal because if the first dependency is already loaded, its callback will run immediately and reference count will become 0, prompting the class to load even if there are still more dependencies to load. Doing two traversals is more efficient than any alternative to counting references, since storing and traversing a table for remaining dependencies would require much more work. To optimize, however, instead of creating a separate table with only strings, we set non-string dependencies to nil (these are existing class objects, so no loading necessary) which does not cause the table to resize at all, then we add them to the metatable dependency list here, and in the second traversal, the iterator will only traverse the remaining string keys, meaning we avoid needing to check again if the values are strings or not.
 	local numUnloadedDependencies = 0
@@ -244,15 +263,7 @@ Class = function(name, dependencies, onDependenciesLoaded, premadeClassObject)
 		end
 	end
 	
-	mt.__call = function(self, constructor, ...)
-		local o = setmetatable({}, getmetatable(self))
-		
-		if constructor then
-			constructor(o, ...)
-		end
-		
-		return o
-	end
+	
 	
 	-- TODO: COME BACK TO INHERITANCE IMPLEMENTATION LATER, SHOULD MOVE THIS LOGIC TO WHEN CLASS GETS LOADED, OR MAYBE IT SHOULD BE INSIDE SETUP FUNCTION ITSELF?
 	--if mt.parents then
@@ -308,7 +319,7 @@ Network.RecieveRPC = function(networkId, funcID, ...)
 	networkObjects[networkId].networkFunctions[funcID](...)
 end
 
-CreateClass("NetworkProfile")
+CreateClass("NetworkProfile") -- maybe network functions can be registered directly in 'Network' singleton, and networkID can simply be a property on the object? thus removing the need for a component. maybe even network ID can live in 'Network' via a map that maps object key to networkID. would mean objects themselves are less polluted with network details
 NetworkProfile.networkID = 0
 NetworkProfile.networkFunctions = {}
 NetworkProfile.RPC = function()
@@ -433,7 +444,7 @@ File.loaded = false -- UNUSED
 File.OnLoadedDelegates = DelegateTable() -- UNUSED
 -- 'PendingFileLoads' doubles as a list of files yet to be successfully loaded and as a way to store 'OnLoaded' callbacks. The callbacks should be stored here instead of the class objects or their metatables because it's not really 'metadata' and would just add clutter. It maps file object keys (weak) to a table of listeners which maps listener object keys (also weak) to an array-style table of callback functions to run when the file loads
 File.PendingFileLoads = WeakKeysTable() -- STATIC VAR
-File.RunWhenLoaded = function(file, eventListener)
+File.RunWhenLoaded = function(file, eventListener) -- PROB NOT GOOD DESIGN, SHOULD USE SINGLE GETFILE FUNC W/ CALLBACK
 	-- if 'PendingFileLoads' contains an entry for 'file', then add the eventListener to the list for that listener
 	local listeners = File.PendingFileLoads[file]
 	if listeners then
@@ -450,6 +461,19 @@ File.RunWhenLoaded = function(file, eventListener)
 		eventListener.callback(eventListener.listener, file)
 	end
 end
+File.OnFileLoaded = function(file, status) -- same nomenclature for callbacks, should probably rename, something that passes or fails loading, or retries it another way
+	-- status is unused for now, but should indicate whether file load was successful, unsuccesful, reason for failure maybe as a code, etc.
+	
+	for listener,callbacks in pairs(File.PendingFileLoads[file]) do
+		-- i is a listener
+		-- v is array w/ callbacks
+		for i=1, #callbacks do
+			callbacks[i](listener, file)
+		end
+	end
+	
+	File.PendingFileLoads[file] = nil
+end
 
 -- Registered files (scripts, images, SFX, etc.), maps uuid string -> file object, which may or may not be pending load
 files = WeakValuesTable() -- IN NEW CORE IM ADDING THIS TO FILE CLASS
@@ -460,6 +484,7 @@ LoadScript = function(file, bytes)
 end
 LoadPng = function(file, bytes)
 	file.cPtr = API_CreateImageFromBytes(bytes, #bytes)
+	File.OnFileLoaded(file, "success")
 end
 
 
@@ -488,6 +513,8 @@ GetFile = function(uuid, eventListener)--OnLoadedCallback) -- MAKE THE PARAM A D
 		listeners[eventListener.listener] = {eventListener.callback}
 	end
 
+	-- ATTEMPT TO LOAD VIA VARIOUS methods
+
 	-- TESTING FILE LOADING FROM STORAGE
 	local data = ReadFile(CACHE_PATH .. "/" .. uuid)-- .. ".lua")
 	if data then
@@ -508,10 +535,11 @@ GetFile = function(uuid, eventListener)--OnLoadedCallback) -- MAKE THE PARAM A D
 	
 	
 	local OnReceivedCallback = function()
-		
+		-- this should be for net requests
 	end
+	-- File.RunWhenLoaded(file, EventListener(file, OnReceivedCallback)) idk wtf im doing im tired figure this out tomorrow
 	
-	-- ATTEMPT TO LOAD VIA VARIOUS methods
+	
 	
 	return file
 end
@@ -596,11 +624,38 @@ end
 local json = assert(loadstring(ReadFile(CACHE_PATH .. "/json.lua")))()
 
 
---CreateClass("Image", {Object2D})
-Class("Image")
+CreateClass("Image", {Object2D})
+--Class("Image")
 Image.cPtr = nil -- pointer to image Object2D
 Image.id = "69696969AFAOSDFIJA" -- TODO:: PASS THIS TO API_Object2D_Create SO IT KNOWS TO GET ITS IMAGE ASSET
 -- id: the image's uuid
+Image.NEWINIT_RENAMELATER = function(self, args)
+	-- SET UP BINDINGS AND CALLBACKS FOR C++ Object2D
+	-- call 'CreateObject2D' func registered from c++, receive its generated objectID, which returns a c ptr, store it as light user data
+	-- another global func which takes void* or Object2D* and whatever value its gotta replace
+	-- need funcs in c++ Object2D for event callbacks (OnClick, OnHover, etc.)
+	
+	-- set this to be child of World2D here for now, though we should actually have this in some base ctr for Object2D
+	table.insert(World2D.children, self)
+	
+	-- set defaults for args and 'objectType' value
+	args.objectType = "Image"
+	
+	self.cPtr = API_Object2D_Create(self) -- TODO: set its image's uuid
+	--self.id = args[1]
+	self.SetPosition(self, 100, 100)
+	self.SetSize(self, 100, 100)
+	-- image file is one cptr, slate object2d is another cptr
+	
+	-- NEW IMPLEMENTATION
+	self.imageFile = imageFile
+	
+	-- we may need to do additional checks if an 'imageFile' can exist separate from our current file system
+	File.RunWhenLoaded(imageFile, EventListener(self, Image.LoadImageFromFile))
+	
+	
+	
+end
 Image.Init = function(self, imageFile)
 	-- SET UP BINDINGS AND CALLBACKS FOR C++ Object2D
 	-- call 'CreateObject2D' func registered from c++, receive its generated objectID, which returns a c ptr, store it as light user data
@@ -620,7 +675,7 @@ Image.Init = function(self, imageFile)
 	self.imageFile = imageFile
 	
 	-- we may need to do additional checks if an 'imageFile' can exist separate from our current file system
-	File.RunWhenLoaded(imageFile, EventListener(EventListener.Init, self, Image.LoadImageFromFile))
+	File.RunWhenLoaded(imageFile, EventListener(self, Image.LoadImageFromFile))
 	
 	
 	
@@ -963,7 +1018,7 @@ function InitializeObject2Ds() -- WHERE IS THIS SUPPOSED TO LIVE IN THE NEW CORE
 end
 
 
-ApplicationEditorClass = GetFile("3DApplicationEditor.lua")--, function()
+--ApplicationEditorClass = GetFile("3DApplicationEditor.lua")--, function()
 --	curApp = ApplicationEditorClass()
 --end)
 
