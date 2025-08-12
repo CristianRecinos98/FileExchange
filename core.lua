@@ -629,7 +629,7 @@ CreateClass("Image", {Object2D})
 Image.cPtr = nil -- pointer to image Object2D
 Image.id = "69696969AFAOSDFIJA" -- TODO:: PASS THIS TO API_Object2D_Create SO IT KNOWS TO GET ITS IMAGE ASSET
 -- id: the image's uuid
-Image.NEWINIT_RENAMELATER = function(self, args)
+Image.NEWINIT_RENAMELATER = function(self, properties)
 	-- SET UP BINDINGS AND CALLBACKS FOR C++ Object2D
 	-- call 'CreateObject2D' func registered from c++, receive its generated objectID, which returns a c ptr, store it as light user data
 	-- another global func which takes void* or Object2D* and whatever value its gotta replace
@@ -638,13 +638,19 @@ Image.NEWINIT_RENAMELATER = function(self, args)
 	-- set this to be child of World2D here for now, though we should actually have this in some base ctr for Object2D
 	table.insert(World2D.children, self)
 	
-	-- set defaults for args and 'objectType' value
-	args.objectType = "Image"
+	properties.objectType = "Image"
+
+	for key,value in pairs(properties) do -- should
+		self[key] = value
+	end
 	
-	self.cPtr = API_Object2D_Create(self) -- TODO: set its image's uuid
-	--self.id = args[1]
-	self.SetPosition(self, 100, 100)
-	self.SetSize(self, 100, 100)
+	-- API_Object2D_Create takes (reference to THIS instance for registry reference, object type, and properties table)
+	-- the object type should be its own parameter and not included with properties to prevent unnecesary bloat, since 'type' is already the class of this object,
+	-- though maybe in the future we can have independent API functions to create each primitive if we feel that's better, but that feels unnecessary too
+	-- !!! ALSO CONSIDER USING OUR OWN REGISTRY SYSTEM TO PREVENT LUA REGISTRY FROM KEEP REFERENCES ALIVE SINCE ITS NOT A WEAK TABLE I DON'T THINK !!!
+	--self.cPtr = API_Object2D_Create(self, "Image", properties) -- should we pass in 'properties' or set properties to instance first, then it can use instance?
+	self.cPtr = API_Object2D_CreateImage(self) -- maybe we can shave off the type parameter too by having engine read class? nah extra unneeded work right
+	
 	-- image file is one cptr, slate object2d is another cptr
 	
 	-- NEW IMPLEMENTATION
@@ -682,6 +688,11 @@ Image.Init = function(self, imageFile)
 end
 Image.LoadImageFromFile = function(self, file)
 	API_Image_SetImage(self.cPtr, file.cPtr)
+end
+Image.x__SETTER = function(self, newValue) --should this live in metatable or out here? maybe yes to avoid polluting the class property table? or maybe it SHOULD live there?
+	--self.position.x = x IS 'POSITION' NEEDED? IT'S MAYBE USEFUL FOR 3D TRANSFORMS BUT NOT FOR 2D TRANSFORMS
+	self.x = newValue
+	API_Object2D_SetX(self.cPtr, newValue)
 end
 Image.SetPositionX = function(self, x)
 	self.position.x = x
@@ -1021,6 +1032,7 @@ end
 --ApplicationEditorClass = GetFile("3DApplicationEditor.lua")--, function()
 --	curApp = ApplicationEditorClass()
 --end)
+
 
 
 
