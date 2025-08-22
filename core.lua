@@ -694,6 +694,15 @@ Image.x__SETTER = function(self, newValue) --should this live in metatable or ou
 	self.x = newValue
 	API_Object2D_SetX(self.cPtr, newValue)
 end
+Image.width__SETTER = function(self, newValue)
+	-- can we implement this without conditional jumps?
+	local newValueType = type(newValue)
+	if newValueType == "string" then
+		-- parse new suffix or detect keyword like "auto"
+	elseif newValueType == "number" then
+		-- "
+	end
+end
 Image.SetPositionX = function(self, x)
 	self.position.x = x
 	API_Object2D_SetPosition(self.cPtr, x, self.position.y)
@@ -1039,3 +1048,4 @@ end
 
 
 return 0 -- THIS MUST BE LAST LINE
+
